@@ -1,0 +1,21 @@
+[Unit]
+Description=fw-keypool New API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fw-keypool/pool-gateway
+Environment=REGISTER_ENABLED=false
+Environment=TZ=Asia/Shanghai
+ExecStartPre=-/usr/sbin/iptables -C INPUT ! -i lo -p tcp --dport 3000 -j DROP
+ExecStartPre=/bin/sh -c '/usr/sbin/iptables -C INPUT ! -i lo -p tcp --dport 3000 -j DROP 2>/dev/null || /usr/sbin/iptables -I INPUT ! -i lo -p tcp --dport 3000 -j DROP'
+ExecStartPre=/bin/sh -c '/usr/sbin/iptables -C INPUT ! -i lo -p tcp --dport 3001 -j DROP 2>/dev/null || /usr/sbin/iptables -I INPUT ! -i lo -p tcp --dport 3001 -j DROP'
+ExecStartPre=/bin/sh -c 'command -v ip6tables >/dev/null 2>&1 && (/usr/sbin/ip6tables -C INPUT ! -i lo -p tcp --dport 3000 -j DROP 2>/dev/null || /usr/sbin/ip6tables -I INPUT ! -i lo -p tcp --dport 3000 -j DROP) || true'
+ExecStartPre=/bin/sh -c 'command -v ip6tables >/dev/null 2>&1 && (/usr/sbin/ip6tables -C INPUT ! -i lo -p tcp --dport 3001 -j DROP 2>/dev/null || /usr/sbin/ip6tables -I INPUT ! -i lo -p tcp --dport 3001 -j DROP) || true'
+ExecStart=/opt/fw-keypool/pool-gateway/new-api
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

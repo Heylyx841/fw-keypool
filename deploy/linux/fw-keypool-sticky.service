@@ -1,0 +1,16 @@
+[Unit]
+Description=fw-keypool sticky proxy
+After=network-online.target fw-keypool-newapi.service
+Wants=network-online.target
+ConditionPathExists=/opt/fw-keypool/data/keys.json
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fw-keypool
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/fw-keypool/.venv/bin/python /opt/fw-keypool/pool-gateway/sticky_proxy.py --host 127.0.0.1 --port 3001 --keys /opt/fw-keypool/data/keys.json --state-db /opt/fw-keypool/data/state.db
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
