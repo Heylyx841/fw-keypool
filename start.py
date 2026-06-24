@@ -135,7 +135,8 @@ def start_sticky_proxy() -> bool:
         ["powershell", "-Command",
          f"Start-Process -FilePath '{sys.executable}' -ArgumentList "
          f"'{STICKY_PROXY}','--host','{STICKY_PROXY_HOST}','--port','{STICKY_PROXY_PORT}',"
-         f"'--keys','{KEYS_JSON}','--fail-threshold','{STICKY_FAIL_THRESHOLD}',"
+         f"'--keys','{KEYS_JSON}','--state-db','{STATE_DB}',"
+         f"'--fail-threshold','{STICKY_FAIL_THRESHOLD}',"
          f"'--timeout','{STICKY_UPSTREAM_TIMEOUT}' -WorkingDirectory '{ROOT}' -NoNewWindow"],
     )
     # 等待启动

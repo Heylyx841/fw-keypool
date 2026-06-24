@@ -59,6 +59,15 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 from log_system import setup_console_logging  # noqa: E402
 
+# registrar 同级目录，用于导入 StateDB 回写运行时禁用状态到 DB + keys.json
+_REGISTRAR_DIR = _PROJECT_ROOT / "registrar"
+if str(_REGISTRAR_DIR) not in sys.path:
+    sys.path.insert(0, str(_REGISTRAR_DIR))
+try:
+    from state_db import StateDB  # noqa: E402
+except Exception:  # pragma: no cover - registrar 缺失时降级为纯内存模式
+    StateDB = None  # type: ignore[assignment]
+
 # 转发到上游时剥除的 hop-by-hop / 冲突头（Authorization 由 sticky key 注入）
 _HOP_BY_HOP = {
     "host", "content-length", "transfer-encoding", "connection", "keep-alive",
@@ -81,11 +90,16 @@ class StickyKeySelector:
     - disabled：被永久禁用的 key 下标集合（连续失败达阈值后加入，之后不再选用）
     - 成功 → fail_count = 0
     - 失败（429 / 5xx / 连接错误 / 超时）→ fail_count += 1（429 不特殊处理，统一计数）
-    - fail_count >= threshold → 永久禁用当前 key，切换到下一个**未禁用**的 key，fail_count 归零
+    - fail_count >= threshold → 永久禁用当前 key，切换到下一个**未禁用**的 key，fail_count 归零；
+      若持有 StateDB 句柄 + index_to_email 映射，则同步回写 DB 的 key_disabled 并重新
+      export keys.json，确保运行时禁用状态持久化（重启不丢失，DB 与 keys.json 实时一致）
     - 所有 key 都被禁用 → 置 all_disabled=True（不再用坏 key 兜底重置；由上层关闭服务并退出程序）
     """
 
-    def __init__(self, keys: list[str], fail_threshold: int = 3) -> None:
+    def __init__(self, keys: list[str], fail_threshold: int = 3, *,
+                 index_to_email: dict[int, str] | None = None,
+                 db: "StateDB | None" = None,
+                 keys_json_path: str | Path | None = None) -> None:
         if not keys:
             raise ValueError("keys 列表为空，sticky_proxy 无法工作")
         self.keys = [k for k in keys if k and k.strip()]
@@ -99,6 +113,37 @@ class StickyKeySelector:
         self._lock = threading.Lock()
         # 切换历史：记录 (时间戳, 旧下标, 新下标, 原因)
         self.switch_history: list[tuple[float, int, int, str]] = []
+        # 运行时禁用回写所需：下标→email 映射 + StateDB 句柄 + keys.json 路径
+        # 三者齐备时，on_failure 永久禁用会同步 DB key_disabled + 重新 export keys.json，
+        # 避免"运行期禁用只存内存、重启丢失、DB 与 keys.json 不同步"的 bug
+        self.index_to_email = index_to_email or {}
+        self.db = db
+        self.keys_json_path = keys_json_path
+
+    def _persist_disable(self, idx: int) -> None:
+        """把运行时永久禁用的 key 回写到 state.db + 重新 export keys.json。
+
+        无锁调用（调用方 on_failure 已持锁）；回写失败仅记日志不抛异常，避免影响转发。
+        DB 是 source of truth，set_key_disabled(email, True, keys_json_path) 会改 DB
+        的 key_disabled 并自动 export keys.json，保证两者一致。
+        """
+        email = self.index_to_email.get(idx)
+        if not email or self.db is None or not self.keys_json_path:
+            # 缺少回写条件（无 email 映射 / 无 DB 句柄 / 无 keys.json 路径）：仅内存禁用
+            logger.warning(
+                "⚠️ key 下标 %d 已内存禁用但未持久化（缺少 email 映射/DB/keys.json 路径），"
+                "重启后该禁用将丢失", idx)
+            return
+        try:
+            updated = self.db.set_key_disabled(email, True, self.keys_json_path)
+            if updated:
+                logger.info("💾 已持久化禁用 key(email=%s) → DB key_disabled=1 并同步 keys.json",
+                            email)
+            else:
+                logger.warning("⚠️ set_key_disabled 未更新任何行（email=%s 不在 DB？）", email)
+        except Exception as e:
+            logger.error("❌ 回写 DB 禁用状态失败(email=%s): %s（仅内存禁用，重启将丢失）",
+                         email, e)
 
     def current_key(self) -> str:
         with self._lock:
@@ -137,6 +182,9 @@ class StickyKeySelector:
             if self.fail_count >= self.fail_threshold:
                 # 永久禁用当前 key
                 self.disabled.add(old_index)
+                # 持久化回写：DB key_disabled=1 + 重新 export keys.json，
+                # 避免"运行期禁用只存内存、重启丢失、DB 与 keys.json 不同步"
+                self._persist_disable(old_index)
                 # 选下一个未禁用的 key
                 nxt = self._next_available((old_index + 1) % len(self.keys))
                 if nxt is None:
@@ -348,19 +396,23 @@ class StickyProxyHandler(BaseHTTPRequestHandler):
         self._proxy("OPTIONS")
 
 
-def load_keys(keys_path: str | Path) -> tuple[list[str], set[int]]:
-    """从 keys.json 加载 Fireworks key 列表与已禁用下标集合。
+def load_keys(keys_path: str | Path) -> tuple[list[str], set[int], dict[int, str]]:
+    """从 keys.json 加载 Fireworks key 列表、已禁用下标集合、以及下标→email 映射。
 
     keys.json 由 state_db.export_keys 生成，每条含
     {"email","api_key",...,"disabled": bool}。
     disabled=True 的 key 仍保留在列表中（保留下标稳定），但其下标加入 disabled 集合，
     sticky_proxy 启动时预填充 StickyKeySelector.disabled，不再选用。
 
-    返回 (keys, disabled_indexes)。
+    下标→email 映射用于运行时永久禁用时回写 state.db（set_key_disabled 按 email 定位行），
+    确保 DB 的 key_disabled 与 keys.json 的 disabled 实时一致，重启后不丢失禁用状态。
+
+    返回 (keys, disabled_indexes, index_to_email)。
     """
     data = json.loads(Path(keys_path).read_text(encoding="utf-8"))
     keys: list[str] = []
     disabled: set[int] = set()
+    index_to_email: dict[int, str] = {}
     for i, r in enumerate(data):
         if not isinstance(r, dict):
             continue
@@ -368,15 +420,22 @@ def load_keys(keys_path: str | Path) -> tuple[list[str], set[int]]:
         if not k:
             continue
         keys.append(k)
+        idx = len(keys) - 1
+        email = (r.get("email") or "").strip()
+        if email:
+            index_to_email[idx] = email
         if r.get("disabled"):
-            disabled.add(len(keys) - 1)
-    return keys, disabled
+            disabled.add(idx)
+    return keys, disabled, index_to_email
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Fireworks sticky 转发代理（同 key 优先 + 连续失败 N 次永久禁用该 key）")
     here = Path(__file__).resolve().parent
     ap.add_argument("--keys", default=str(here.parent / "data" / "keys.json"), help="keys.json 路径")
+    ap.add_argument("--state-db", default=str(here.parent / "data" / "state.db"),
+                    help="state.db 路径（运行时永久禁用 key 时回写 key_disabled，"
+                    "确保 DB 与 keys.json 同步；缺失则仅内存禁用，重启丢失）")
     ap.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1，本机自用）")
     ap.add_argument("--port", type=int, default=3001, help="监听端口（默认 3001，避开 New API 3000）")
     ap.add_argument("--upstream", default="https://api.fireworks.ai/inference/v1",
@@ -399,11 +458,30 @@ def main() -> int:
     except Exception:
         pass
 
-    keys, disabled = load_keys(args.keys)
+    keys, disabled, index_to_email = load_keys(args.keys)
     if not keys:
         logger.error("❌ keys.json 无有效 key: %s", args.keys)
         return 1
-    selector = StickyKeySelector(keys, fail_threshold=args.fail_threshold)
+    # 构造 StateDB 句柄：运行时永久禁用 key 时回写 DB key_disabled + 重新 export keys.json，
+    # 避免"运行期禁用只存内存、重启丢失、DB 与 keys.json 不同步"。StateDB 缺失则降级纯内存。
+    db = None
+    if StateDB is not None and Path(args.state_db).exists():
+        try:
+            db = StateDB(args.state_db)
+            logger.info("🗄️ 已连接 state.db: %s（运行时禁用将回写 DB + keys.json）",
+                        args.state_db)
+        except Exception as e:
+            logger.warning("⚠️ 打开 state.db 失败(%s): %s，降级为纯内存禁用（重启将丢失）",
+                           args.state_db, e)
+            db = None
+    elif StateDB is None:
+        logger.warning("⚠️ state_db 模块不可用（registrar/ 缺失），降级为纯内存禁用（重启将丢失）")
+    else:
+        logger.warning("⚠️ state.db 不存在: %s，降级为纯内存禁用（重启将丢失）", args.state_db)
+    selector = StickyKeySelector(
+        keys, fail_threshold=args.fail_threshold,
+        index_to_email=index_to_email, db=db, keys_json_path=args.keys,
+    )
     # 预填充 DB 中已标记永久禁用的 key（keys.json 的 disabled 字段）
     if disabled:
         selector.disabled = set(disabled)
