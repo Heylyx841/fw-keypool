@@ -1,0 +1,32 @@
+[
+  {
+    "email": "user1@example.com",
+    "protocol": "pop3",
+    "host": "pop.example.com",
+    "port": 995,
+    "username": "user1@example.com",
+    "auth_code": "YOUR_AUTH_CODE_1",
+    "alias_pattern": "",
+    "note": "主邮箱1"
+  },
+  {
+    "email": "user2@example.com",
+    "protocol": "imap",
+    "host": "imap.example.com",
+    "port": 993,
+    "username": "user2@example.com",
+    "auth_code": "YOUR_AUTH_CODE_2",
+    "alias_pattern": "",
+    "note": "主邮箱2"
+  },
+  {
+    "email": "base@mydomain.com",
+    "protocol": "imap",
+    "host": "imap.mydomain.com",
+    "port": 993,
+    "username": "base@mydomain.com",
+    "auth_code": "AUTH_CODE",
+    "alias_pattern": "base+fw{seq:03d}@mydomain.com",
+    "note": "Catch-all 域名邮箱示例：alias_pattern 用 {seq:03d} 占位符批量生成别名 base+fw000 base+fw001 ..."
+  }
+]

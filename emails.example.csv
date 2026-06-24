@@ -1,0 +1,5 @@
+email,protocol,host,port,username,auth_code,alias_pattern,note
+user1@example.com,pop3,pop.example.com,995,user1@example.com,YOUR_AUTH_CODE_1,,主邮箱1
+user2@example.com,imap,imap.example.com,993,user2@example.com,YOUR_AUTH_CODE_2,,主邮箱2
+# alias_pattern 示例（Catch-all 域名邮箱，批量生成别名）：
+# base@mydomain.com,imap,imap.mydomain.com,993,base@mydomain.com,AUTH_CODE,base+fw{seq:03d}@mydomain.com,可生成 base+fw001 base+fw002 ...

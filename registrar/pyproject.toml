@@ -1,0 +1,24 @@
+[project]
+name = "fw-keypool-registrar"
+version = "0.1.0"
+description = "Fireworks API 号池 - 造号端（注册+取Key流水线）"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.40",
+    "playwright-stealth>=1.0.6",
+    "imap-tools>=1.7",
+    "beautifulsoup4>=4.12",
+    "PyYAML>=6.0",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+captcha = ["2captcha-python>=1.2"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["email_pool", "state_db", "mail_fetcher", "verifier_extract", "fireworks_registrar", "key_fetcher", "orchestrator", "run", "config", "karing_proxy"]

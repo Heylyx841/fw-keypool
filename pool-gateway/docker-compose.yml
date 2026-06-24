@@ -1,0 +1,33 @@
+# New API 号池承载层 — 本机 Docker 部署
+# 本机自用：绑定 127.0.0.1，SQLite 持久化卷挂载本地 data 目录
+# 文档：https://github.com/quantumnous/new-api
+
+services:
+  new-api:
+    image: calciumion/new-api:latest
+    container_name: fw-keypool-newapi
+    # 仅本机访问，不对外暴露
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+    environment:
+      # 初始化 root 账号（首次启动生效）
+      - INITIAL_ROOT_USER=root
+      - INITIAL_ROOT_TOKEN=changeme123
+      # SQLite 模式（轻量，无需额外数据库容器）
+      - SQL_DSN=
+      # 关闭注册（仅自用，避免被外部注册）
+      - REGISTER_ENABLED=false
+      # 时区
+      - TZ=Asia/Shanghai
+    volumes:
+      # 数据持久化（SQLite + 配置）
+      - ./data:/data
+      # 日志
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+
+# 环境/密钥
+.env
+*.env.local
+newapi.env
+emails.csv
+emails.json
+raw.txt
+raw_*.txt
+data/keys.json
+data/state.db
+data/state.db-journal
+data/state.db-wal
+data/state.db-shm
+data/logs/
+data/screenshots/
+
+# New API 号池端运行时产物（含 token/二进制，勿入库）
+pool-gateway/new-api.exe
+pool-gateway/one-api.db
+pool-gateway/one-api.db-journal
+pool-gateway/one-api.db-wal
+pool-gateway/one-api.db-shm
+pool-gateway/logs/
+
+# CodeGraph 索引（生成物）
+.codegraph/
+
+# Playwright
+playwright-report/
+test-results/
+.ms-playwright/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store

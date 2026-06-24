@@ -1,0 +1,138 @@
+# ============================================================
+# registrar 配置 — 所有"实现期需现场确认项"均在此可配置
+# P0 任务：手动走一遍 Fireworks 注册抓包，固化下列选择器与端点
+# ============================================================
+
+# ---------- Fireworks 站点（已抓包固化 2026-06-23 完整流程） ----------
+# 完整流程：注册(2步) → 验证邮件(链接) → 登录 → onboarding问卷 → API Key 页
+fireworks:
+  signup_url: "https://app.fireworks.ai/signup"              # 注册入口（两步式）
+  login_url: "https://app.fireworks.ai/login/email?redirectURI=%2Faccount%2Fhome"  # 登录页
+  onboarding_url: "https://app.fireworks.ai/onboarding"      # 登录后跳转的问卷页
+  api_keys_url: "https://app.fireworks.ai/settings/users/api-keys"  # API Key 管理页
+  base_url: "https://api.fireworks.ai/inference/v1"          # New API 渠道 base_url
+
+  form_selectors:
+    # ===== 注册 第1步：邮箱页 =====
+    email_input: "input#email-display"                       # id=email-display, name=email
+    name_input: ""                                            # 注册无姓名字段，留空跳过
+    submit_button: "button[type='submit']:text-is('Next')"  # 第1步 Next（精确匹配，避免匹配到 'Next slide' 轮播图按钮）
+    # ===== 注册 第2步：密码页 =====
+    password_input: "input#password"                         # id=password, name=password
+    confirm_password_input: "input#confirm-password"         # id=confirm-password, name=confirmPassword
+    password_submit_button: "button[type='submit']:has-text('Create Account')"  # 第2步提交
+    # ===== 登录页 =====
+    login_email_input: "input[data-testid='login-form-email']"       # data-testid=login-form-email
+    login_password_input: "input[data-testid='login-form-password']" # data-testid=login-form-password
+    login_submit_button: "button[data-testid='login-form-submit']"   # data-testid=login-form-submit
+    # ===== onboarding 问卷页（两页式）=====
+    # 第1页 ProfileSection：填姓名 + 勾 Terms of Service + Continue
+    onboarding_firstname_input: "input[name='firstName']"
+    onboarding_lastname_input: "input[name='lastName']"
+    onboarding_terms_checkbox: "button[role='checkbox']"     # 第1页 Terms of Service 复选框
+    onboarding_step1_next: "button:has-text('Continue')"     # 第1页 Continue（type=button, ProfileSection.tsx）
+    # 第2页 QuestionnaireSection：按选项文字定位 checkbox（比动态 id 稳定）
+    # 问卷有两组问题，每组随机不定项选择（至少选 1 项，降低固定选项指纹风险）
+    # 第1组：8 个选项（"你为什么使用 Fireworks"类问题）
+    onboarding_questionnaire_group1_options:
+      - "Prototype with open models"
+      - "Flexible capacity for experimentation"
+      - "Flexible capacity for production"
+      - "Faster speeds or lower costs"
+      - "Fine-tune models for quality"
+      - "High reliability inference for production"
+      - "Migrate from closed to open models"
+      - "Migrate from self-hosting to third-party"
+    # 第2组：5 个选项（"你的使用场景"类问题）
+    onboarding_questionnaire_group2_options:
+      - "Code Assistance"
+      - "Conversational AI"
+      - "Agentic AI"
+      - "Search"
+      - "Multimedia RAG"
+    onboarding_questionnaire_checkbox: "button[role='checkbox']"           # 选项内的 checkbox
+    onboarding_done_button: "button[name='done']:has-text('Submit to get')"  # 第2页完成按钮
+    # 兼容旧字段（保留以避免读取报错，不再用于实际勾选）
+    onboarding_questionnaire_option_1_text: "Prototype with open models"
+    onboarding_questionnaire_option_2_text: "Code Assistance"
+    # ===== API Key 页 =====
+    api_key_create_button: "button:has-text('Create API Key')"           # 下拉触发按钮
+    api_key_menu_item: "div[role='menuitem']:has-text('API Key')"        # 菜单项
+    api_key_name_input: "input#name"                                      # Key 名称输入
+    api_key_generate_button: "button[type='submit']:has-text('Generate Key')"  # 生成按钮
+    api_key_value_selector: "code"                                        # Key 在 <code>fw_xxx</code>
+
+  # ===== 验证邮件特征（已抓包确认） =====
+  email_sender_pattern: "no-reply@fireworks.ai"
+  email_subject_pattern: "Verify your Fireworks account"
+  verification_type: "link"                              # 验证链接（非验证码）
+  verification_code_regex: "\\b(\\d{6})\\b"
+  # 链接形如 https://app.fireworks.ai/signup/confirm?client_id=...&confirmation_code=...
+  verification_link_regex: "https?://app\\.fireworks\\.ai/signup/confirm\\?[^\\s\"'<>]+"
+
+  # 模型列表（用于 New API 渠道 models 字段，P0 仍可在 Fireworks 文档微调）
+  models:
+    - "fireworks/llama-v3-70b-instruct"
+    - "fireworks/llama-v3p1-405b-instruct"
+    - "fireworks/mixtral-8x22b-instruct"
+
+  # 反爬策略：默认 none，可插拔。抓包发现验证码再切 manual/2captcha
+  captcha_strategy: "none"
+  # stealth 注入：默认 false。
+  # 实测结论（probe_step1.py）：stealth 把 navigator.webdriver 设为 false 反而触发 Fireworks
+  # 降级纯 HTML 页（无 React）；而 add_init_script 删 webdriver 返回 undefined 才返回正常 React SPA。
+  # 因此 stealth 有害无益，保持 false，仅依赖 add_init_script 隐藏 webdriver。
+  enable_stealth: false
+
+# ---------- 邮件收取 ----------
+mail:
+  poll_interval_sec: 10
+  poll_timeout_sec: 180
+  # POP3/IMAP 连接超时
+  connect_timeout_sec: 30
+  # POP 登录连续失败阈值：超过此数判定为假邮箱并禁用（不再用于注册）
+  # 默认 3，即第 4 次失败触发禁用（用户要求 >3）
+  pop_login_fail_threshold: 3
+
+# ---------- 注册编排 ----------
+registrar:
+  concurrency: 1            # 并发数（默认 1 串行最稳；建议 1-3，过高触发风控）
+  timeout_sec: 300          # 单邮箱全流程超时
+  max_retry: 3              # 失败重试次数
+  # headless：true=不弹出浏览器窗口（无人值守），false=弹窗（可观察）。
+  # 旧 headless shell 间歇返回降级 HTML 页，但代码已有降级页检测 + max_page_retry=3 重试兜底；
+  # 默认 true 满足「窗口不出现」需求，降级时自动重试。如需观察流程可改 false。
+  headless: true
+  min_delay_sec: 5          # 并发间最小随机延时
+  max_delay_sec: 15         # 并发间最大随机延时
+  # 代理池（可选，每行一个 http://user:pass@host:port）
+  # 默认本机代理 127.0.0.1:3067（降低封 IP 风险，不同邮箱可走不同出口）
+  proxy_pool:
+    - "http://127.0.0.1:3067"
+
+# ---------- Karing 代理控制 ----------
+# Karing 是 Clash 兼容（sing-box 核心）图形代理客户端。每注册一个 key 通过控制端口
+# 切换到一个延迟 <max_latency_ms 的可用节点；代理出口端口不变（Playwright 始终走
+# proxy_out），karing 内部按选中节点转发，实现「每号换出口 IP」。
+karing:
+  enabled: true              # 开关：false 则不切换节点，沿用 proxy_pool 固定出口
+  api_host: "127.0.0.1"
+  api_port: 3057             # 控制端口（Clash 风格 RESTful API，列节点/切换/测延迟）
+  proxy_port: 3067           # 代理出口端口（注册请求走这里，与 proxy_pool 一致）
+  dashboard_port: 3072       # 在线面板端口（Web UI，仅记录/探活）
+  cluster_port: 3050         # 集群服务端口（仅记录）
+  selector_name: ""          # Selector 组名，空=自动发现第一个 Selector 类型组
+  secret: ""                 # 控制端口 secret（karing service.json "secret" 字段），无则 401；建议放 .env KARING_SECRET
+  delay_test_url: "https://www.gstatic.com/generate_204"  # 延迟测试 URL（轻量 204）
+  max_latency_ms: 400        # 节点延迟阈值（ms），超过视为不可用换下一个
+  node_timeout_ms: 5000      # 单节点延迟测试超时（ms）
+  switch_per_key: true       # true=每注册一个 key 换一个节点（轮换未用过的可用节点）
+  request_timeout: 6.0       # 控制端口 HTTP 请求超时（秒）
+
+# ---------- 路径 ----------
+# 相对 fw-keypool 项目根（data/ 已移入 fw-keypool 内部）
+paths:
+  state_db: "data/state.db"
+  keys_json: "data/keys.json"
+  logs_dir: "data/logs"
+  screenshots_dir: "data/screenshots"
