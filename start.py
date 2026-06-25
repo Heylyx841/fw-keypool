@@ -1,7 +1,7 @@
 """fw-keypool 一键启动脚本：启动 New API + 初始化 + 录入邮箱池 + 注册造号 + 同步渠道。
 
 功能：
-1. 启动 New API（pool-gateway/new-api.exe，SQLite 模式，若未运行则后台启动）
+1. 启动 New API（pool-gateway/new-api 或 new-api.exe，SQLite 模式，若未运行则后台启动）
 2. 初始化 New API（POST /api/setup 创建 root + 生成 API token，若首次）
 3. 从 emails.csv 加载邮箱池入库（registrar run.py --load-only）
 4. 注册造号（registrar run.py --limit N）
@@ -34,25 +34,69 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent
 REGISTRAR = ROOT / "registrar"
 POOL = ROOT / "pool-gateway"
-NEWAPI_EXE = POOL / "new-api.exe"
 NEWAPI_ENV = POOL / "newapi.env"
 STATE_DB = ROOT / "data" / "state.db"
 KEYS_JSON = ROOT / "data" / "keys.json"
 STICKY_PROXY = POOL / "sticky_proxy.py"
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / ".env")
+    load_dotenv(NEWAPI_ENV)
+except Exception:
+    pass
+
 # New API 默认配置（首次初始化用）
-NEWAPI_BASE_URL = "http://127.0.0.1:3000"
-NEWAPI_ROOT_USER = "root"
-NEWAPI_ROOT_PASS = "changeme123"
+NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL", "http://127.0.0.1:3000")
+NEWAPI_ROOT_USER = os.getenv("NEWAPI_ADMIN_USER", "root")
+NEWAPI_ROOT_PASS = os.getenv("NEWAPI_ADMIN_PASS", "changeme123")
 # 固定 API token 的 key（生成的 token key 固定为此值，方便记忆/测试；可用 --api-key 修改）
 # 最终调用 token 形如 sk-123456。New API AddToken 后端自动生成 key，故创建后直接改 DB。
 DEFAULT_FIXED_API_KEY = "123456"
 # sticky_proxy 默认配置（无限调用纯透传入口）
-STICKY_PROXY_HOST = "127.0.0.1"
-STICKY_PROXY_PORT = 3001
+STICKY_PROXY_HOST = os.getenv("STICKY_PROXY_HOST", "127.0.0.1")
+STICKY_PROXY_PORT = int(os.getenv("STICKY_PROXY_PORT", "3001"))
 STICKY_PROXY_URL = f"http://{STICKY_PROXY_HOST}:{STICKY_PROXY_PORT}"
-STICKY_FAIL_THRESHOLD = 3
-STICKY_UPSTREAM_TIMEOUT = 120
+STICKY_FAIL_THRESHOLD = int(os.getenv("STICKY_FAIL_THRESHOLD", "3"))
+STICKY_UPSTREAM_TIMEOUT = int(os.getenv("STICKY_UPSTREAM_TIMEOUT", "120"))
+
+
+def _newapi_binary() -> Path:
+    """Return the New API binary path for the current platform.
+
+    `NEWAPI_BIN` can point to a custom binary. Otherwise Linux/macOS use
+    pool-gateway/new-api and Windows keeps the historical new-api.exe name.
+    """
+    override = os.getenv("NEWAPI_BIN", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    if os.name == "nt":
+        return POOL / "new-api.exe"
+    return POOL / "new-api"
+
+
+def _open_process_log(name: str):
+    log_dir = ROOT / "data" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return (log_dir / name).open("ab", buffering=0)
+
+
+def _popen_detached(cmd: list[str], cwd: Path, env: dict[str, str] | None, log_name: str) -> subprocess.Popen:
+    """Start a long-running child process in the background on Windows/Linux."""
+    log_file = _open_process_log(log_name)
+    kwargs: dict = {
+        "cwd": str(cwd),
+        "env": env,
+        "stdout": log_file,
+        "stderr": subprocess.STDOUT,
+        "stdin": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    else:
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(cmd, **kwargs)
 
 
 def _run(cmd: list[str], cwd: Path, label: str, check: bool = True) -> bool:
@@ -77,25 +121,27 @@ def newapi_is_running() -> bool:
 
 
 def start_newapi() -> bool:
-    """后台启动 New API（new-api.exe，SQLite 模式）。"""
+    """后台启动 New API（跨平台二进制，SQLite 模式）。"""
     if newapi_is_running():
         logger.info("✓ New API 已在运行（%s）", NEWAPI_BASE_URL)
         return True
-    if not NEWAPI_EXE.exists():
-        logger.error("❌ New API 二进制不存在: %s", NEWAPI_EXE)
-        logger.error("   下载: https://github.com/quantumnous/new-api/releases/download/v1.0.0-rc.14/new-api-v1.0.0-rc.14.exe")
+    newapi_bin = _newapi_binary()
+    if not newapi_bin.exists():
+        logger.error("❌ New API 二进制不存在: %s", newapi_bin)
+        if os.name == "nt":
+            logger.error("   下载: https://github.com/QuantumNous/new-api/releases/download/v1.0.0-rc.14/new-api-v1.0.0-rc.14.exe")
+        else:
+            logger.error("   Linux 可执行: bash scripts/install_newapi_linux.sh")
         return False
-    logger.info("▶ 启动 New API（SQLite 模式，%s）", NEWAPI_EXE)
+    if os.name != "nt" and not os.access(newapi_bin, os.X_OK):
+        logger.error("❌ New API 二进制不可执行: %s（请 chmod +x 或运行 scripts/install_newapi_linux.sh）", newapi_bin)
+        return False
+    logger.info("▶ 启动 New API（SQLite 模式，%s）", newapi_bin)
     env = os.environ.copy()
     env.pop("SQL_DSN", None)  # 不设才走 SQLite
     env["REGISTER_ENABLED"] = "false"
     env["TZ"] = "Asia/Shanghai"
-    # 后台启动（PowerShell Start-Process）
-    subprocess.Popen(
-        ["powershell", "-Command",
-         f"Start-Process -FilePath '{NEWAPI_EXE}' -WorkingDirectory '{POOL}' -NoNewWindow"],
-        env=env,
-    )
+    _popen_detached([str(newapi_bin)], cwd=POOL, env=env, log_name="new-api.log")
     # 等待启动
     for i in range(15):
         time.sleep(2)
@@ -131,13 +177,20 @@ def start_sticky_proxy() -> bool:
         logger.error("❌ sticky_proxy.py 不存在: %s", STICKY_PROXY)
         return False
     logger.info("▶ 启动 sticky_proxy（纯透传无限入口，%s）", STICKY_PROXY_URL)
-    subprocess.Popen(
-        ["powershell", "-Command",
-         f"Start-Process -FilePath '{sys.executable}' -ArgumentList "
-         f"'{STICKY_PROXY}','--host','{STICKY_PROXY_HOST}','--port','{STICKY_PROXY_PORT}',"
-         f"'--keys','{KEYS_JSON}','--state-db','{STATE_DB}',"
-         f"'--fail-threshold','{STICKY_FAIL_THRESHOLD}',"
-         f"'--timeout','{STICKY_UPSTREAM_TIMEOUT}' -WorkingDirectory '{ROOT}' -NoNewWindow"],
+    _popen_detached(
+        [
+            sys.executable,
+            str(STICKY_PROXY),
+            "--host", STICKY_PROXY_HOST,
+            "--port", str(STICKY_PROXY_PORT),
+            "--keys", str(KEYS_JSON),
+            "--state-db", str(STATE_DB),
+            "--fail-threshold", str(STICKY_FAIL_THRESHOLD),
+            "--timeout", str(STICKY_UPSTREAM_TIMEOUT),
+        ],
+        cwd=ROOT,
+        env=os.environ.copy(),
+        log_name="sticky_proxy.log",
     )
     # 等待启动
     for i in range(10):
@@ -195,6 +248,7 @@ def init_newapi(fixed_api_key: str = DEFAULT_FIXED_API_KEY) -> str | None:
 
     # 3. 关闭计费/价格/额度统计（无限调用：不记录已用、不展示剩余限制）
     configure_unlimited_billing(c, h)
+    configure_private_instance(c, h)
 
     # 4. 查是否已有 API token
     try:
@@ -296,6 +350,15 @@ def configure_unlimited_billing(client: httpx.Client, headers: dict) -> None:
     logger.info("✓ 已关闭 New API 计费/价格/额度统计 %d 项（无限调用：不记录已用/不展示剩余限制）", success)
 
 
+def configure_private_instance(client: httpx.Client, headers: dict) -> None:
+    """Disable public self-registration options on the local New API instance."""
+    for key in ("RegisterEnabled", "PasswordRegisterEnabled"):
+        try:
+            client.put("/api/option/", json={"key": key, "value": "false"}, headers=headers, timeout=15)
+        except Exception as e:
+            logger.debug("关闭 New API 注册选项 %s 失败: %s", key, e)
+
+
 def _ensure_token_unlimited(client: httpx.Client, headers: dict, token_id: int) -> None:
     """确保已有 token 为无限配额（兜底：把旧 token 升级为 unlimited_quota + 永不过期）。"""
     try:
@@ -360,18 +423,37 @@ def _fix_token_key(token_id: int, fixed_key: str) -> bool:
 
 def ensure_newapi_env(api_token: str | None) -> None:
     """确保 newapi.env 存在且含 ADMIN_USER/PASS（sync_channels 用）。"""
-    if NEWAPI_ENV.exists():
+    defaults = {
+        "NEWAPI_BASE_URL": NEWAPI_BASE_URL,
+        "NEWAPI_ADMIN_USER": NEWAPI_ROOT_USER,
+        "NEWAPI_ADMIN_PASS": NEWAPI_ROOT_PASS,
+        "NEWAPI_ACCESS_TOKEN": api_token or "",
+        "FIREWORKS_BASE_URL": "https://api.fireworks.ai/inference",
+        "CHANNEL_GROUP": "default",
+        "CHANNEL_PRIORITY": "0",
+        "CHANNEL_WEIGHT": "100",
+    }
+    if not NEWAPI_ENV.exists():
+        NEWAPI_ENV.write_text("".join(f"{k}={v}\n" for k, v in defaults.items()), encoding="utf-8")
+        logger.info("✓ 已生成 %s", NEWAPI_ENV)
         return
-    NEWAPI_ENV.write_text(
-        f"NEWAPI_BASE_URL={NEWAPI_BASE_URL}\n"
-        f"NEWAPI_ADMIN_USER={NEWAPI_ROOT_USER}\n"
-        f"NEWAPI_ADMIN_PASS={NEWAPI_ROOT_PASS}\n"
-        f"NEWAPI_ACCESS_TOKEN={api_token or ''}\n"
-        f"FIREWORKS_BASE_URL=https://api.fireworks.ai/inference\n"
-        f"CHANNEL_GROUP=default\nCHANNEL_PRIORITY=0\nCHANNEL_WEIGHT=100\n",
-        encoding="utf-8",
-    )
-    logger.info("✓ 已生成 %s", NEWAPI_ENV)
+
+    lines = NEWAPI_ENV.read_text(encoding="utf-8").splitlines()
+    present = {
+        line.split("=", 1)[0].strip()
+        for line in lines
+        if line.strip() and not line.lstrip().startswith("#") and "=" in line
+    }
+    missing = [k for k in defaults if k not in present]
+    if not missing:
+        return
+    with NEWAPI_ENV.open("a", encoding="utf-8") as f:
+        if lines and lines[-1].strip():
+            f.write("\n")
+        f.write("\n# Added by start.py for Linux/headless deployment\n")
+        for key in missing:
+            f.write(f"{key}={defaults[key]}\n")
+    logger.info("✓ 已补齐 %s 缺失配置: %s", NEWAPI_ENV, ", ".join(missing))
 
 
 def main() -> int:
