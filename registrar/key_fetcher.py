@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from config import AppConfig
+from name_generator import gen_key_name
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +119,10 @@ class KeyFetcher:
                 except Exception:
                     pass
                 await page.wait_for_selector(sel.api_key_name_input, state="visible", timeout=15000)
-                key_name = "test"
-                logger.info("填 Key 名称: %s", key_name)
+                # Key 名称随机化：避免所有 Key 都叫 "test" 的明显批量特征。
+                # gen_key_name 从 5 种模式加权随机生成（如 prod-key-a3f9 / smith-42 / proj-beta-3c1d2a）。
+                key_name = gen_key_name()
+                logger.info("填 Key 名称（随机）: %s", key_name)
                 await page.fill(sel.api_key_name_input, key_name)
 
                 # 5. 点 Generate Key 生成
