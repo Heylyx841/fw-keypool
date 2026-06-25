@@ -1,0 +1,27 @@
+name: Auto Request Review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  request-review:
+    name: Request Heylyx841 Review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request reviewer
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const reviewers = ['Heylyx841'];
+            const { data } = await github.rest.pulls.requestReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              reviewers,
+            });
+            core.info(`Requested review from: ${reviewers.join(', ')}`);
+            core.info(`Current reviewers: ${data.requested_reviewers.map(r => r.login).join(', ')}`);
