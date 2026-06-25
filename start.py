@@ -457,9 +457,15 @@ def main() -> int:
     if KEYS_JSON.exists():
         import json
         keys = json.loads(KEYS_JSON.read_text(encoding="utf-8"))
-        print(f"\n号池渠道数: {len(keys)}")
-        for k in keys:
+        # 号池渠道数只统计可用（非 disabled）key，与 sync_channels 录入过滤逻辑一致：
+        # disabled 的 key 不会被录入渠道，故不计入号池渠道数。
+        usable = [r for r in keys if not r.get("disabled")]
+        disabled_count = len(keys) - len(usable)
+        print(f"\n号池渠道数: {len(usable)}（可用 {len(usable)}，禁用 {disabled_count}/{len(keys)}）")
+        for k in usable:
             print(f"  {k['email']}  key={k['api_key'][:12]}...")
+        if disabled_count:
+            print(f"  （另有 {disabled_count} 个已禁用 key 未计入号池渠道数）")
     print("\n说明: 两入口均与 Fireworks 官方调用行为一致（base_url/模型名/认证格式）")
     print("  token 已设 unlimited_quota=True + 永不过期 + 计费统计已关闭 → 无限调用")
     print("  仅受上游 Fireworks 账号 credit 限制，号池多 key 轮换即可视作无限")
